@@ -57,10 +57,7 @@ DASHBOARD_RUN="${DASHBOARD_RUN:-if command -v hermes >/dev/null 2>&1; then
   echo \"  http://127.0.0.1:${PORT}\";
   echo;
 
-  hermes dashboard --host ${HOST} --port ${PORT} --chat \
-  || hermes dashboard --host ${HOST} --port ${PORT} \
-  || hermes dashboard --tui --no-open \
-  || hermes dashboard;
+  HERMES_DASHBOARD_TUI=1 hermes dashboard --tui --host ${HOST} --port ${PORT} --no-open;
 else
   echo \"Hermes not found. Cannot start dashboard.\";
 fi}"
