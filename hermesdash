@@ -9,10 +9,19 @@ PROJECT="$(cd "$PROJECT" && pwd)"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-9119}"
 
+VPS_IP="${VPS_IP:-$(curl -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')}"
+SSH_TARGET="${SSH_TARGET:-root@${VPS_IP}}"
+SSH_TUNNEL_CMD="ssh -L ${PORT}:127.0.0.1:${PORT} ${SSH_TARGET}"
+
 command -v tmux >/dev/null 2>&1 || {
   echo "tmux is not installed."
   exit 1
 }
+
+# Clean old dashboard BEFORE creating tmux layout
+if command -v hermes >/dev/null 2>&1; then
+  hermes dashboard --stop >/dev/null 2>&1 || true
+fi
 
 attach_session() {
   if [[ -n "${TMUX:-}" ]]; then
@@ -37,24 +46,25 @@ pane_cmd() {
   printf "bash -lc '%s; printf \"\\n\\n[exited] shell ready\\n\"; exec bash -l'" "$body"
 }
 
-# ---------- Pane commands ----------
-GIT_RUN="${GIT_RUN:-if command -v lazygit >/dev/null 2>&1; then lazygit; else git status; fi}"
+GIT_RUN="${GIT_RUN:-if git -C \"$PROJECT\" rev-parse --is-inside-work-tree >/dev/null 2>&1; then cd \"$PROJECT\" && lazygit; else echo \"Not in a git repository.\"; echo \"Run: hermesdash /path/to/git/repo\"; fi}"
 
 FILES_RUN="${FILES_RUN:-if command -v yazi >/dev/null 2>&1; then yazi; elif command -v nvim >/dev/null 2>&1; then nvim .; else ls -la; fi}"
 
-HERMES_RUN="${HERMES_RUN:-if command -v hermes >/dev/null 2>&1; then hermes; else echo \"Hermes not found.\"; fi}"
+HERMES_RUN="${HERMES_RUN:-if command -v hermes >/dev/null 2>&1; then hermes chat --tui || hermes; else echo \"Hermes not found.\"; fi}"
 
 DASHBOARD_RUN="${DASHBOARD_RUN:-if command -v hermes >/dev/null 2>&1; then
-  echo \"Starting Hermes dashboard...\";
+  clear;
+  echo \"Starting Hermes dashboard with Chat tab enabled...\";
   echo;
-  echo \"Dashboard on VPS:\";
-  echo \"  http://${HOST}:${PORT}\";
+  echo \"COPY THIS ON YOUR PC:\";
   echo;
-  echo \"From your PC, run:\";
-  echo \"  ssh -L ${PORT}:127.0.0.1:${PORT} root@YOUR_VPS_IP\";
+  echo \"${SSH_TUNNEL_CMD}\";
   echo;
   echo \"Then open:\";
-  echo \"  http://127.0.0.1:${PORT}\";
+  echo;
+  echo \"http://127.0.0.1:${PORT}\";
+  echo;
+  echo \"Server output:\";
   echo;
 
   HERMES_DASHBOARD_TUI=1 hermes dashboard --tui --host ${HOST} --port ${PORT} --no-open;
@@ -64,7 +74,6 @@ fi}"
 
 TERMINAL_RUN="${TERMINAL_RUN:-bash -l}"
 
-# ---------- Create layout ----------
 git_pane="$(
   tmux new-session -d \
     -s "$SESSION" \
@@ -106,54 +115,26 @@ terminal_pane="$(
     "$(pane_cmd "$TERMINAL_RUN")"
 )"
 
-# ---------- Resize layout ----------
-cols="$(tput cols 2>/dev/null || echo 160)"
-lines="$(tput lines 2>/dev/null || echo 45)"
-
-if ! [[ "$cols" =~ ^[0-9]+$ ]]; then
-  cols=160
-fi
-
-if ! [[ "$lines" =~ ^[0-9]+$ ]]; then
-  lines=45
-fi
-
-left_w=$(( cols * 24 / 100 ))
-right_w=$(( cols * 30 / 100 ))
-
-left_top_h=$(( lines * 55 / 100 ))
-right_top_h=$(( lines * 62 / 100 ))
-
-(( left_w < 26 )) && left_w=26
-(( right_w < 34 )) && right_w=34
-(( left_top_h < 8 )) && left_top_h=8
-(( right_top_h < 8 )) && right_top_h=8
-
-tmux resize-pane -t "$git_pane" -x "$left_w" || true
-tmux resize-pane -t "$dashboard_pane" -x "$right_w" || true
-
-tmux resize-pane -t "$git_pane" -y "$left_top_h" || true
-tmux resize-pane -t "$dashboard_pane" -y "$right_top_h" || true
-
-# ---------- Styling ----------
 tmux set-option -t "$SESSION" status off
 tmux set-option -t "$SESSION" mouse on
 
 tmux set-window-option -t "$SESSION:$WINDOW" pane-border-status top
 tmux set-window-option -t "$SESSION:$WINDOW" pane-border-style "fg=colour248"
 tmux set-window-option -t "$SESSION:$WINDOW" pane-active-border-style "fg=colour46,bold"
-
 tmux set-window-option -t "$SESSION:$WINDOW" pane-border-format '#[fg=#{?pane_active,colour46,colour248},bold] #T #[fg=#{?pane_active,colour46,colour248}]━━━━━━━━━━━━━━━━ '
-
 tmux set-window-option -t "$SESSION:$WINDOW" pane-border-lines heavy 2>/dev/null || true
 tmux set-window-option -t "$SESSION:$WINDOW" mode-style "fg=colour255,bg=colour24"
 
-# ---------- Pane names ----------
 tmux select-pane -t "$git_pane" -T "git"
 tmux select-pane -t "$files_pane" -T "files"
-tmux select-pane -t "$hermes_pane" -T "hermes"
-tmux select-pane -t "$dashboard_pane" -T "hermes dashboard"
+tmux select-pane -t "$hermes_pane" -T "hermes chat"
+tmux select-pane -t "$dashboard_pane" -T "dashboard server"
 tmux select-pane -t "$terminal_pane" -T "terminal"
+
+tmux resize-pane -t "$git_pane" -x 46 || true
+tmux resize-pane -t "$dashboard_pane" -x 58 || true
+tmux resize-pane -t "$git_pane" -y 20 || true
+tmux resize-pane -t "$dashboard_pane" -y 18 || true
 
 tmux select-pane -t "$hermes_pane"
 
