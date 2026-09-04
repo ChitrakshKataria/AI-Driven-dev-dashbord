@@ -100,5 +100,4 @@ detection without downloading packages:
 ```
 
 ## License
-
-DevDash is available under the MIT License.
+This repository is licensed under the MIT Licence If you use or redistribute this project, please keep the original copyright and licence notice. Credit is appreciated.
