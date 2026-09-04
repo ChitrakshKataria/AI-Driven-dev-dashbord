@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: devdash [PROJECT]
+
+Open a six-pane tmux workspace for PROJECT. If PROJECT is omitted, DevDash
+uses the current directory.
+
+Environment variables:
+  SESSION       Base tmux session name (default: dev)
+  WINDOW        tmux window name (default: main)
+  GIT_RUN       Command for the git pane
+  FILES_RUN     Command for the file browser pane
+  CODEX_RUN     Command for the Codex pane
+  CLAUDE_RUN    Command for the Claude Code pane
+  SIDE_RUN      Command for the spare shell pane
+  DEV_RUN       Command for the development server pane
+
+Examples:
+  devdash
+  devdash ~/code/my-project
+  DEV_RUN="python3 -m http.server" devdash .
+  SESSION=my-app devdash .
+EOF
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
+if (( $# > 1 )); then
+  usage >&2
+  exit 2
+fi
+
+SESSION="${SESSION:-dev}"
+WINDOW="${WINDOW:-main}"
+PROJECT="${1:-$PWD}"
+
+if [[ ! -d "$PROJECT" ]]; then
+  printf 'devdash: project directory not found: %s\n' "$PROJECT" >&2
+  exit 1
+fi
+
+PROJECT="$(cd "$PROJECT" && pwd -P)"
+
+if ! command -v tmux >/dev/null 2>&1; then
+  printf 'devdash: tmux is not installed. Run ./install.sh first.\n' >&2
+  exit 1
+fi
+
+BASE_SESSION="$SESSION"
+session_suffix=2
+while tmux has-session -t "$SESSION" 2>/dev/null; do
+  SESSION="${BASE_SESSION}-${session_suffix}"
+  session_suffix=$((session_suffix + 1))
+done
+
+attach_session() {
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux switch-client -t "$SESSION"
+  else
+    tmux attach-session -t "$SESSION"
+  fi
+}
+
+escape_single_quotes() {
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+}
+
+pane_cmd() {
+  local body
+  body="$(escape_single_quotes "$1")"
+  printf "bash -lc '%s; printf \\\"\\n\\n[exited] shell ready\\n\\\"; exec bash -l'" "$body"
+}
+
+GIT_RUN="${GIT_RUN:-if command -v lazygit >/dev/null 2>&1; then lazygit; else git status; fi}"
+FILES_RUN="${FILES_RUN:-if command -v yazi >/dev/null 2>&1; then yazi; elif command -v nvim >/dev/null 2>&1; then nvim .; else ls -la; fi}"
+CODEX_RUN="${CODEX_RUN:-if command -v codex >/dev/null 2>&1; then codex; else echo \"Codex is not installed.\"; fi}"
+CLAUDE_RUN="${CLAUDE_RUN:-if command -v claude >/dev/null 2>&1; then claude; else echo \"Claude Code is not installed.\"; fi}"
+SIDE_RUN="${SIDE_RUN:-bash -l}"
+
+if [[ -n "${DEV_RUN:-}" ]]; then
+  DEV_COMMAND="$DEV_RUN"
+elif [[ -f "$PROJECT/package.json" ]]; then
+  if [[ -f "$PROJECT/bun.lockb" || -f "$PROJECT/bun.lock" ]]; then
+    DEV_COMMAND="bun run dev"
+  elif [[ -f "$PROJECT/pnpm-lock.yaml" ]]; then
+    DEV_COMMAND="pnpm dev"
+  elif [[ -f "$PROJECT/yarn.lock" ]]; then
+    DEV_COMMAND="yarn dev"
+  else
+    DEV_COMMAND="npm run dev"
+  fi
+else
+  DEV_COMMAND='echo "No package.json found. Development pane ready."'
+fi
+
+git_pane="$(
+  tmux new-session -d \
+    -s "$SESSION" \
+    -n "$WINDOW" \
+    -c "$PROJECT" \
+    -P -F '#{pane_id}' \
+    "$(pane_cmd "$GIT_RUN")"
+)"
+
+codex_pane="$(
+  tmux split-window -h \
+    -t "$git_pane" \
+    -c "$PROJECT" \
+    -P -F '#{pane_id}' \
+    "$(pane_cmd "$CODEX_RUN")"
+)"
+
+side_pane="$(
+  tmux split-window -h \
+    -t "$codex_pane" \
+    -c "$PROJECT" \
+    -P -F '#{pane_id}' \
+    "$(pane_cmd "$SIDE_RUN")"
+)"
+
+files_pane="$(
+  tmux split-window -v \
+    -t "$git_pane" \
+    -c "$PROJECT" \
+    -P -F '#{pane_id}' \
+    "$(pane_cmd "$FILES_RUN")"
+)"
+
+claude_pane="$(
+  tmux split-window -v \
+    -t "$codex_pane" \
+    -c "$PROJECT" \
+    -P -F '#{pane_id}' \
+    "$(pane_cmd "$CLAUDE_RUN")"
+)"
+
+dev_pane="$(
+  tmux split-window -v \
+    -t "$side_pane" \
+    -c "$PROJECT" \
+    -P -F '#{pane_id}' \
+    "$(pane_cmd "$DEV_COMMAND")"
+)"
+
+cols="$(tput cols 2>/dev/null || printf '160')"
+lines="$(tput lines 2>/dev/null || printf '45')"
+
+[[ "$cols" =~ ^[0-9]+$ ]] || cols=160
+[[ "$lines" =~ ^[0-9]+$ ]] || lines=45
+
+left_w=$((cols * 24 / 100))
+right_w=$((cols * 25 / 100))
+left_top_h=$((lines * 55 / 100))
+right_top_h=$((lines * 58 / 100))
+middle_top_h=$((lines * 50 / 100))
+
+((left_w < 26)) && left_w=26
+((right_w < 28)) && right_w=28
+((left_top_h < 8)) && left_top_h=8
+((right_top_h < 8)) && right_top_h=8
+((middle_top_h < 8)) && middle_top_h=8
+
+tmux resize-pane -t "$git_pane" -x "$left_w" || true
+tmux resize-pane -t "$side_pane" -x "$right_w" || true
+tmux resize-pane -t "$git_pane" -y "$left_top_h" || true
+tmux resize-pane -t "$side_pane" -y "$right_top_h" || true
+tmux resize-pane -t "$codex_pane" -y "$middle_top_h" || true
+
+tmux set-option -t "$SESSION" status off
+tmux set-option -t "$SESSION" mouse on
+tmux set-window-option -t "$SESSION:$WINDOW" pane-border-status top
+tmux set-window-option -t "$SESSION:$WINDOW" pane-border-style 'fg=colour248'
+tmux set-window-option -t "$SESSION:$WINDOW" pane-active-border-style 'fg=colour46,bold'
+tmux set-window-option -t "$SESSION:$WINDOW" pane-border-format '#[fg=#{?pane_active,colour46,colour248},bold] #T #[fg=#{?pane_active,colour46,colour248}]━━━━━━━━━━━━━━━━ '
+tmux set-window-option -t "$SESSION:$WINDOW" pane-border-lines heavy 2>/dev/null || true
+tmux set-window-option -t "$SESSION:$WINDOW" mode-style 'fg=colour255,bg=colour24'
+
+tmux select-pane -t "$git_pane" -T git
+tmux select-pane -t "$files_pane" -T files
+tmux select-pane -t "$codex_pane" -T codex
+tmux select-pane -t "$claude_pane" -T 'claude helper'
+tmux select-pane -t "$side_pane" -T shell
+tmux select-pane -t "$dev_pane" -T 'dev server'
+tmux select-pane -t "$codex_pane"
+
+attach_session
