@@ -15,7 +15,7 @@ Open Terminal on macOS, or your WSL terminal on Windows, then run:
 
 ```bash
 git clone https://github.com/ChitrakshKataria/AI-Driven-vibecoding-dev-dashbord.git
-cd AI-Driven-vibecoding-dev-dashbord
+cd AI-Driven-dev-dashbord
 chmod +x install.sh
 ./install.sh
 ```
